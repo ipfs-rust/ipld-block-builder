@@ -4,7 +4,7 @@
 use crate::block::*;
 use crate::codec::{Codec, Decode, Encode};
 #[cfg(feature = "crypto")]
-use crate::crypto::Key;
+pub use crate::crypto::Key;
 #[cfg(feature = "crypto")]
 use crate::error::Error;
 use crate::error::Result;
