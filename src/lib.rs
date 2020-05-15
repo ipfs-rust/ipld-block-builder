@@ -1,16 +1,25 @@
 //! Block builder.
 #![deny(missing_docs)]
 #![deny(warnings)]
-pub use libipld::*;
 use crate::block::*;
+use crate::codec::{Codec, Decode, Encode};
+#[cfg(feature = "crypto")]
+use crate::crypto::Key;
+#[cfg(feature = "crypto")]
+use crate::error::Error;
 use crate::error::Result;
-use crate::codec::{Codec, Encode, Decode};
-use crate::multihash::{Multihasher, Code};
+use crate::multihash::{Code, Multihasher};
 use crate::path::Path as IpldPath;
-use crate::store::{ReadonlyStore, Store, AliasStore, MultiUserStore, Visibility};
+#[cfg(feature = "crypto")]
+use crate::raw::Raw;
+use crate::store::{AliasStore, MultiUserStore, ReadonlyStore, Store, Visibility};
+pub use libipld::*;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
+
+#[cfg(feature = "crypto")]
+mod crypto;
 
 /// Path in a dag.
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -39,6 +48,8 @@ pub struct GenericBlockBuilder<S, H: Multihasher<Code>, C: Codec> {
     _marker: PhantomData<(H, C)>,
     store: S,
     visibility: Visibility,
+    #[cfg(feature = "crypto")]
+    key: Option<Key>,
 }
 
 impl<S, H: Multihasher<Code>, C: Codec> GenericBlockBuilder<S, H, C> {
@@ -48,15 +59,19 @@ impl<S, H: Multihasher<Code>, C: Codec> GenericBlockBuilder<S, H, C> {
             _marker: PhantomData,
             store,
             visibility: Visibility::Public,
+            #[cfg(feature = "crypto")]
+            key: None,
         }
     }
 
     /// Creates a builder for private blocks.
-    pub fn new_private(store: S) -> Self {
+    #[cfg(feature = "crypto")]
+    pub fn new_private(store: S, key: Key) -> Self {
         Self {
             _marker: PhantomData,
             store,
             visibility: Visibility::Private,
+            key: Some(key),
         }
     }
 }
@@ -79,12 +94,26 @@ impl<S: ReadonlyStore, H: Multihasher<Code>, C: Codec> GenericBlockBuilder<S, H,
     /// Returns the decoded block with cid.
     pub async fn get<D: Decode<C>>(&self, cid: &Cid) -> Result<D> {
         let data = self.store.get(cid).await?;
+        #[cfg(feature = "crypto")]
+        if let Some(key) = self.key.as_ref() {
+            let ct = decode::<Raw, Box<[u8]>>(cid, &data)?;
+            let (codec, data) =
+                crypto::decrypt(key, ct).map_err(|e| Error::CodecError(Box::new(e)))?;
+            return Ok(raw_decode::<C, D>(codec, &data)?);
+        }
         Ok(decode::<C, D>(cid, &data)?)
     }
 
     /// Returns the ipld representation of a block with cid.
     pub async fn get_ipld(&self, cid: &Cid) -> Result<Ipld> {
         let data = self.store.get(cid).await?;
+        #[cfg(feature = "crypto")]
+        if let Some(key) = self.key.as_ref() {
+            let ct = decode::<Raw, Box<[u8]>>(cid, &data)?;
+            let (codec, data) =
+                crypto::decrypt(key, ct).map_err(|e| Error::CodecError(Box::new(e)))?;
+            return Ok(raw_decode_ipld(codec, &data)?);
+        }
         Ok(decode_ipld(cid, &data)?)
     }
 
@@ -106,6 +135,16 @@ impl<S: ReadonlyStore, H: Multihasher<Code>, C: Codec> GenericBlockBuilder<S, H,
 impl<S: Store, H: Multihasher<Code>, C: Codec> GenericBlockBuilder<S, H, C> {
     /// Encodes and inserts a block into the store.
     pub async fn insert<E: Encode<C>>(&self, e: &E) -> Result<Cid> {
+        #[cfg(feature = "crypto")]
+        let Block { cid, data } = if let Some(key) = self.key.as_ref() {
+            let data = C::encode(e).map_err(|e| Error::CodecError(Box::new(e)))?;
+            let ct =
+                crypto::encrypt(key, C::CODE, &data).map_err(|e| Error::CodecError(Box::new(e)))?;
+            encode::<Raw, H, _>(&ct)?
+        } else {
+            encode::<C, H, E>(e)?
+        };
+        #[cfg(not(feature = "crypto"))]
         let Block { cid, data } = encode::<C, H, E>(e)?;
         self.store.insert(&cid, data, self.visibility).await?;
         Ok(cid)
@@ -176,6 +215,44 @@ mod tests {
     async fn test_dag() {
         let store = MemStore::default();
         let builder = BlockBuilder::new(store);
+        let ipld1 = ipld!({"a": 3});
+        let cid = builder.insert(&ipld1).await.unwrap();
+        let ipld2 = ipld!({"root": [{"child": &cid}]});
+        let root = builder.insert(&ipld2).await.unwrap();
+        let path = DagPath::new(&root, "root/0/child/a");
+        assert_eq!(builder.get_path(&path).await.unwrap(), Ipld::Integer(3));
+    }
+
+    #[derive(Clone, DagCbor, Debug, Eq, PartialEq)]
+    struct Identity {
+        id: u64,
+        name: String,
+        age: u8,
+    }
+
+    #[async_std::test]
+    #[cfg(feature = "crypto")]
+    async fn test_block_builder_private() {
+        let key = Key::from(b"private encryption key".to_vec());
+        let store = MemStore::default();
+        let builder = BlockBuilder::new_private(store, key);
+
+        let identity = Identity {
+            id: 0,
+            name: "David Craven".into(),
+            age: 26,
+        };
+        let cid = builder.insert(&identity).await.unwrap();
+        let identity2 = builder.get(&cid).await.unwrap();
+        assert_eq!(identity, identity2);
+    }
+
+    #[async_std::test]
+    #[cfg(feature = "crypto")]
+    async fn test_dag_private() {
+        let key = Key::from(b"private encryption key".to_vec());
+        let store = MemStore::default();
+        let builder = BlockBuilder::new_private(store, key);
         let ipld1 = ipld!({"a": 3});
         let cid = builder.insert(&ipld1).await.unwrap();
         let ipld2 = ipld!({"root": [{"child": &cid}]});
