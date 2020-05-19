@@ -1,26 +1,25 @@
-use crate::block::decode;
-use crate::cid::Cid;
-use crate::codec::{Codec, Decode};
-use crate::error::Result;
-use crate::store::ReadonlyStore;
+use crate::codec::Decoder;
 use cached::Cached;
 use cached::stores::SizedCache;
-use core::marker::PhantomData;
+use libipld::cid::Cid;
+use libipld::codec::Decode;
+use libipld::error::Result;
+use libipld::store::ReadonlyStore;
 
 /// Cache for ipld blocks.
-pub struct GenericCache<'a, S, C, T> {
-    _marker: PhantomData<C>,
-    cache: SizedCache<Cid, T>,
+pub struct Cache<'a, S, C, T> {
     store: &'a S,
+    codec: &'a C,
+    cache: SizedCache<Cid, T>,
 }
 
-impl<'a, S: ReadonlyStore, C: Codec, T: Clone + Decode<C>> GenericCache<'a, S, C, T> {
+impl<'a, S: ReadonlyStore, C: Decoder, T: Clone + Decode<C::Codec>> Cache<'a, S, C, T> {
     /// Creates a new cache of size `size`.
-    pub fn with_size(store: &'a S, size: usize) -> Self {
+    pub fn new(store: &'a S, codec: &'a C, size: usize) -> Self {
         Self {
-            _marker: PhantomData,
-            cache: SizedCache::with_size(size),
             store,
+            codec,
+            cache: SizedCache::with_size(size),
         }
     }
 
@@ -30,7 +29,7 @@ impl<'a, S: ReadonlyStore, C: Codec, T: Clone + Decode<C>> GenericCache<'a, S, C
             return Ok(value);
         }
         let data = self.store.get(cid).await?;
-        let value = decode::<C, T>(cid, &data)?;
+        let value: T = self.codec.decode(cid, &data)?;
         self.cache.cache_set(cid.clone(), value.clone());
         Ok(value)
     }

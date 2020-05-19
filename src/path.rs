@@ -1,4 +1,4 @@
-use crate::cid::Cid;
+use libipld::cid::Cid;
 pub use libipld::path::Path as IpldPath;
 
 /// Path in a dag.

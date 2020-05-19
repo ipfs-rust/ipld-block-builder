@@ -5,22 +5,24 @@
 mod batch;
 mod builder;
 mod cache;
+mod codec;
 #[cfg(feature = "crypto")]
 mod crypto;
 mod path;
 
-pub use batch::GenericBatch;
-pub use builder::GenericBlockBuilder;
-pub use cache::GenericCache;
+pub use batch::Batch;
+pub use builder::BlockBuilder;
+pub use cache::Cache;
+pub use codec::*;
 #[cfg(feature = "crypto")]
 pub use crypto::{Error, Key};
-pub use libipld::*;
 pub use path::DagPath;
 
-use crate::cbor::DagCbor;
-use crate::multihash::Blake2b256;
+use libipld::cbor::DagCbor;
+use libipld::multihash::Blake2b256;
 
-/// Default batch.
-pub type Batch<'a> = GenericBatch<'a, DagCbor, Blake2b256>;
-/// Default block builder.
-pub type BlockBuilder<S> = GenericBlockBuilder<S, Blake2b256, DagCbor>;
+/// Default codec.
+pub type Codec = GenericCodec<DagCbor, Blake2b256>;
+/// Default encrypted codec.
+#[cfg(feature = "crypto")]
+pub type StrobeCodec = GenericStrobeCodec<DagCbor, Blake2b256>;

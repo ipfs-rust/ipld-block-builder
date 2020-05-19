@@ -1,55 +1,46 @@
-use crate::batch::GenericBatch;
-use crate::block::*;
-use crate::cache::GenericCache;
-use crate::cid::Cid;
-use crate::codec::{Codec, Decode, Encode};
-#[cfg(feature = "crypto")]
-use crate::crypto::Key;
-use crate::error::{Error, Result};
-use crate::ipld::Ipld;
-use crate::multihash::{Code, Multihasher};
+use crate::batch::Batch;
+use crate::cache::Cache;
+use crate::codec::{Decoder, Encoder, Encrypted, IpldDecoder};
 use crate::path::DagPath;
-#[cfg(feature = "crypto")]
-use crate::raw::Raw;
-use crate::store::{AliasStore, MultiUserStore, ReadonlyStore, Store, Visibility};
-use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use libipld::block::Block;
+use libipld::cid::Cid;
+use libipld::codec::{Decode, Encode};
+use libipld::error::{Error, Result};
+use libipld::ipld::Ipld;
+use libipld::store::{AliasStore, MultiUserStore, ReadonlyStore, Store, Visibility};
+use std::ops::Deref;
 use std::path::Path;
 
 /// Generic block builder for creating blocks.
-pub struct GenericBlockBuilder<S, H, C> {
-    _marker: PhantomData<(H, C)>,
+pub struct BlockBuilder<S, C> {
     store: S,
+    codec: C,
     visibility: Visibility,
-    #[cfg(feature = "crypto")]
-    key: Option<Key>,
 }
 
-impl<S, H, C> GenericBlockBuilder<S, H, C> {
+impl<S, C> BlockBuilder<S, C> {
     /// Creates a builder for public blocks.
-    pub fn new(store: S) -> Self {
+    pub fn new(store: S, codec: C) -> Self {
         Self {
-            _marker: PhantomData,
             store,
+            codec,
             visibility: Visibility::Public,
-            #[cfg(feature = "crypto")]
-            key: None,
-        }
-    }
-
-    /// Creates a builder for private blocks.
-    #[cfg(feature = "crypto")]
-    pub fn new_private(store: S, key: Key) -> Self {
-        Self {
-            _marker: PhantomData,
-            store,
-            visibility: Visibility::Private,
-            key: Some(key),
         }
     }
 }
 
-impl<S, H, C> Deref for GenericBlockBuilder<S, H, C> {
+impl<S, C: Encrypted> BlockBuilder<S, C> {
+    /// Creates a builder for private blocks.
+    pub fn new_private(store: S, codec: C) -> Self {
+        Self {
+            store,
+            codec,
+            visibility: Visibility::Private,
+        }
+    }
+}
+
+impl<S, C> Deref for BlockBuilder<S, C> {
     type Target = S;
 
     fn deref(&self) -> &Self::Target {
@@ -57,44 +48,24 @@ impl<S, H, C> Deref for GenericBlockBuilder<S, H, C> {
     }
 }
 
-impl<S, H, C> DerefMut for GenericBlockBuilder<S, H, C> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.store
-    }
-}
-
-impl<S: ReadonlyStore, H, C: Codec> GenericBlockBuilder<S, H, C> {
+impl<S: ReadonlyStore, C: Decoder> BlockBuilder<S, C> {
     /// Returns the decoded block with cid.
-    pub async fn get<D: Decode<C>>(&self, cid: &Cid) -> Result<D> {
+    pub async fn get<D: Decode<C::Codec>>(&self, cid: &Cid) -> Result<D> {
         let data = self.store.get(cid).await?;
-        #[cfg(feature = "crypto")]
-        if let Some(key) = self.key.as_ref() {
-            let ct = decode::<Raw, Box<[u8]>>(cid, &data)?;
-            let (codec, data) =
-                crypto::decrypt(key, ct).map_err(|e| Error::CodecError(Box::new(e)))?;
-            return Ok(raw_decode::<C, D>(codec, &data)?);
-        }
-        Ok(decode::<C, D>(cid, &data)?)
+        self.codec.decode(cid, &data)
     }
 
     /// Creates a new typed cache.
-    pub fn create_cache<D: Clone + Decode<C>>(&self, size: usize) -> GenericCache<'_, S, C, D> {
-        GenericCache::with_size(&self.store, size)
+    pub fn create_cache<T: Clone + Decode<C::Codec>>(&self, size: usize) -> Cache<'_, S, C, T> {
+        Cache::new(&self.store, &self.codec, size)
     }
 }
 
-impl<S: ReadonlyStore, H, C> GenericBlockBuilder<S, H, C> {
+impl<S: ReadonlyStore, C: IpldDecoder> BlockBuilder<S, C> {
     /// Returns the ipld representation of a block with cid.
     pub async fn get_ipld(&self, cid: &Cid) -> Result<Ipld> {
         let data = self.store.get(cid).await?;
-        #[cfg(feature = "crypto")]
-        if let Some(key) = self.key.as_ref() {
-            let ct = decode::<Raw, Box<[u8]>>(cid, &data)?;
-            let (codec, data) =
-                crypto::decrypt(key, ct).map_err(|e| Error::CodecError(Box::new(e)))?;
-            return Ok(raw_decode_ipld(codec, &data)?);
-        }
-        Ok(decode_ipld(cid, &data)?)
+        self.codec.decode_ipld(cid, &data)
     }
 
     /// Resolves a path recursively and returns the ipld.
@@ -112,24 +83,21 @@ impl<S: ReadonlyStore, H, C> GenericBlockBuilder<S, H, C> {
     }
 }
 
-impl<S: Store, H: Multihasher<Code>, C: Codec> GenericBlockBuilder<S, H, C> {
+impl<S: Store, C: Encoder> BlockBuilder<S, C> {
     /// Creates a new batch.
-    pub fn create_batch<'a>(&'a self) -> GenericBatch<'a, C, H> {
-        #[cfg(feature = "crypto")]
-        return GenericBatch::new(&self.key);
-        #[cfg(not(feature = "crypto"))]
-        GenericBatch::new()
+    pub fn create_batch<'a>(&'a self) -> Batch<C> {
+        Batch::new(&self.codec)
     }
 
     /// Encodes and inserts a block into the store.
-    pub async fn insert<E: Encode<C>>(&self, e: &E) -> Result<Cid> {
+    pub async fn insert<E: Encode<C::Codec>>(&self, e: &E) -> Result<Cid> {
         let mut batch = self.create_batch();
         batch.insert(e)?;
         self.insert_batch(batch).await
     }
 
     /// Inserts a batch of blocks atomically pinning the last one.
-    pub async fn insert_batch<A, B>(&self, batch: GenericBatch<'_, A, B>) -> Result<Cid> {
+    pub async fn insert_batch<T>(&self, batch: Batch<'_, T>) -> Result<Cid> {
         // TODO add insert batch to store trait
         let mut last_cid = None;
         for Block { cid, data } in batch.into_iter() {
@@ -144,7 +112,7 @@ impl<S: Store, H: Multihasher<Code>, C: Codec> GenericBlockBuilder<S, H, C> {
     }
 }
 
-impl<S: Store, H, C> GenericBlockBuilder<S, H, C> {
+impl<S: Store, C> BlockBuilder<S, C> {
     /// Flushes the store to disk.
     pub async fn flush(&self) -> Result<()> {
         Ok(self.store.flush().await?)
@@ -156,14 +124,14 @@ impl<S: Store, H, C> GenericBlockBuilder<S, H, C> {
     }
 }
 
-impl<S: MultiUserStore, H, C> GenericBlockBuilder<S, H, C> {
+impl<S: MultiUserStore, C> BlockBuilder<S, C> {
     /// Pins a block in the store.
     pub async fn pin(&self, cid: &Cid, path: &Path) -> Result<()> {
         Ok(self.store.pin(cid, path).await?)
     }
 }
 
-impl<S: AliasStore, H, C> GenericBlockBuilder<S, H, C> {
+impl<S: AliasStore, C> BlockBuilder<S, C> {
     /// Creates an alias for a cid.
     pub async fn alias(&self, alias: &[u8], cid: &Cid) -> Result<()> {
         Ok(self.store.alias(alias, cid, self.visibility).await?)
@@ -183,13 +151,19 @@ impl<S: AliasStore, H, C> GenericBlockBuilder<S, H, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BlockBuilder, DagCbor, ipld};
-    use crate::mem::MemStore;
+    use crate::Codec;
+    #[cfg(feature = "crypto")]
+    use crate::StrobeCodec;
+    #[cfg(feature = "crypto")]
+    use crate::crypto::Key;
+    use libipld::{DagCbor, ipld};
+    use libipld::mem::MemStore;
 
     #[async_std::test]
     async fn test_block_builder() {
         let store = MemStore::default();
-        let builder = BlockBuilder::new(store);
+        let codec = Codec::new();
+        let builder = BlockBuilder::new(store, codec);
 
         let block1 = ipld!({
             "value": 42,
@@ -209,7 +183,8 @@ mod tests {
     #[async_std::test]
     async fn test_dag() {
         let store = MemStore::default();
-        let builder = BlockBuilder::new(store);
+        let codec = Codec::new();
+        let builder = BlockBuilder::new(store, codec);
         let ipld1 = ipld!({"a": 3});
         let cid = builder.insert(&ipld1).await.unwrap();
         let ipld2 = ipld!({"root": [{"child": &cid}]});
@@ -230,7 +205,8 @@ mod tests {
     async fn test_block_builder_private() {
         let key = Key::from(b"private encryption key".to_vec());
         let store = MemStore::default();
-        let builder = BlockBuilder::new_private(store, key);
+        let codec = StrobeCodec::new(key);
+        let builder = BlockBuilder::new_private(store, codec);
 
         let identity = Identity {
             id: 0,
@@ -247,7 +223,8 @@ mod tests {
     async fn test_dag_private() {
         let key = Key::from(b"private encryption key".to_vec());
         let store = MemStore::default();
-        let builder = BlockBuilder::new_private(store, key);
+        let codec = StrobeCodec::new(key);
+        let builder = BlockBuilder::new_private(store, codec);
         let ipld1 = ipld!({"a": 3});
         let cid = builder.insert(&ipld1).await.unwrap();
         let ipld2 = ipld!({"root": [{"child": &cid}]});

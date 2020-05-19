@@ -1,6 +1,6 @@
-use crate::cid::Codec;
 use core::convert::TryFrom;
 use core::ops::Deref;
+use libipld::cid::Codec;
 use rand::RngCore;
 use secrecy::{ExposeSecret, Secret};
 use strobe_rs::{SecParam, Strobe};
@@ -10,6 +10,9 @@ use zeroize::Zeroize;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
 
+/// A secret key.
+///
+/// Key is zeroized on drop.
 pub struct Key(Secret<Vec<u8>>);
 
 impl Deref for Key {
@@ -34,15 +37,20 @@ impl From<&mut [u8]> for Key {
     }
 }
 
+/// Crypto error.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Key needs to be at least 128 bits (16 bytes).
     #[error("key needs to be at least 128 bits (16 bytes).")]
     KeyTooShort,
+    /// Cipher text needs to be larger than nonce + tag.
     #[error("cipher text needs to be larger than nonce + tag.")]
     CipherTooShort,
+    /// Mac integrity check failed.
     #[error("mac integrity check failed.")]
     Integrity,
-    #[error("failed to decode codec: {0}.")]
+    /// Failed to decode data.
+    #[error("failed to decode data: {0}.")]
     Codec(Box<dyn std::error::Error + Send>),
 }
 
