@@ -1,5 +1,6 @@
 use crate::batch::GenericBatch;
 use crate::block::*;
+use crate::cache::GenericCache;
 use crate::cid::Cid;
 use crate::codec::{Codec, Decode, Encode};
 #[cfg(feature = "crypto")]
@@ -74,6 +75,11 @@ impl<S: ReadonlyStore, H, C: Codec> GenericBlockBuilder<S, H, C> {
             return Ok(raw_decode::<C, D>(codec, &data)?);
         }
         Ok(decode::<C, D>(cid, &data)?)
+    }
+
+    /// Creates a new typed cache.
+    pub fn create_cache<D: Clone + Decode<C>>(&self, size: usize) -> GenericCache<'_, S, C, D> {
+        GenericCache::with_size(&self.store, size)
     }
 }
 

@@ -4,12 +4,14 @@
 
 mod batch;
 mod builder;
+mod cache;
 #[cfg(feature = "crypto")]
 mod crypto;
 mod path;
 
 pub use batch::GenericBatch;
 pub use builder::GenericBlockBuilder;
+pub use cache::GenericCache;
 #[cfg(feature = "crypto")]
 pub use crypto::{Error, Key};
 pub use libipld::*;
