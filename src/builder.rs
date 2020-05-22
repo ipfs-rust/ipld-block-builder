@@ -102,7 +102,10 @@ impl<S: Store, C: Encoder + Clone> BlockBuilder<S, C> {
 
     /// Inserts a batch of blocks atomically pinning the last one.
     pub async fn insert_batch<T>(&self, batch: Batch<T>) -> Result<Cid> {
-        Ok(self.store.insert_batch(batch.into_vec(), self.visibility).await?)
+        Ok(self
+            .store
+            .insert_batch(batch.into_vec(), self.visibility)
+            .await?)
     }
 }
 
@@ -145,13 +148,13 @@ impl<S: AliasStore, C> BlockBuilder<S, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "crypto")]
+    use crate::crypto::Key;
     use crate::Codec;
     #[cfg(feature = "crypto")]
     use crate::StrobeCodec;
-    #[cfg(feature = "crypto")]
-    use crate::crypto::Key;
-    use libipld::{DagCbor, ipld};
     use libipld::mem::MemStore;
+    use libipld::{ipld, DagCbor};
 
     #[async_std::test]
     async fn test_block_builder() {
