@@ -10,7 +10,7 @@ pub struct Batch<C> {
     blocks: Vec<Block>,
 }
 
-impl<C> Batch<C>{
+impl<C> Batch<C> {
     /// Creates a new batch.
     pub fn new(codec: C) -> Self {
         Self {

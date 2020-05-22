@@ -1,8 +1,8 @@
 use crate::batch::Batch;
 use crate::builder::BlockBuilder;
 use crate::codec::{Decoder, Encoder};
-use cached::Cached;
 use cached::stores::SizedCache;
+use cached::Cached;
 use libipld::cid::Cid;
 use libipld::codec::{Decode, Encode};
 use libipld::error::Result;
