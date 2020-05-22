@@ -5,7 +5,7 @@ authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
 description = "library for dealing with ipld"
-repository = "https://github.com/dvc94ch/ipld-block-builder"
+repository = "https://github.com/ipfs-rust/ipld-block-builder"
 
 [features]
 crypto = ["rand", "secrecy", "strobe-rs", "thiserror", "unsigned-varint", "zeroize"]
