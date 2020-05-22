@@ -3,30 +3,37 @@ use libipld::block::Block;
 use libipld::cid::Cid;
 use libipld::codec::Encode;
 use libipld::error::Result;
-use smallvec::SmallVec;
 
 /// Batch of blocks to insert atomically.
-pub struct Batch<'a, C> {
-    codec: &'a C,
-    blocks: SmallVec<[Block; 8]>,
+pub struct Batch<C> {
+    codec: C,
+    blocks: Vec<Block>,
 }
 
-impl<'a, C> Batch<'a, C>{
+impl<C> Batch<C>{
     /// Creates a new batch.
-    pub fn new(codec: &'a C) -> Self {
+    pub fn new(codec: C) -> Self {
         Self {
             codec,
             blocks: Default::default(),
         }
     }
 
+    /// Creates a new batch with capacity.
+    pub fn with_capacity(codec: C, capacity: usize) -> Self {
+        Self {
+            codec,
+            blocks: Vec::with_capacity(capacity),
+        }
+    }
+
     /// Returns an iterator of `Block`.
-    pub fn into_iter(self) -> impl Iterator<Item = Block> {
-        self.blocks.into_iter()
+    pub fn into_vec(self) -> Vec<Block> {
+        self.blocks
     }
 }
 
-impl<'a, C: Encoder> Batch<'a, C> {
+impl<C: Encoder> Batch<C> {
     /// Inserts a block into the batch.
     pub fn insert<T: Encode<C::Codec>>(&mut self, value: &T) -> Result<&Cid> {
         let block = self.codec.encode(value)?;

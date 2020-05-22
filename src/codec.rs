@@ -9,8 +9,10 @@ use libipld::error::Result;
 use libipld::ipld::Ipld;
 use libipld::multihash::{Code, Multihasher};
 #[cfg(feature = "crypto")]
-use libipld::raw::Raw;
+use libipld::raw::RawCodec;
 use std::marker::PhantomData;
+#[cfg(feature = "crypto")]
+use std::sync::Arc;
 
 /// Encoder trait.
 pub trait Encoder {
@@ -42,7 +44,7 @@ pub trait IpldDecoder {
 pub trait Encrypted {}
 
 /// Generic ipld codec.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct GenericCodec<C, H> {
     _marker: PhantomData<(C, H)>,
 }
@@ -81,9 +83,10 @@ impl<C, H> IpldDecoder for GenericCodec<C, H> {
 
 /// Generic encrypted codec.
 #[cfg(feature = "crypto")]
+#[derive(Clone)]
 pub struct GenericStrobeCodec<C, H> {
     _marker: PhantomData<(C, H)>,
-    key: Key,
+    key: Arc<Key>,
 }
 
 #[cfg(feature = "crypto")]
@@ -92,7 +95,7 @@ impl<C, H> GenericStrobeCodec<C, H> {
     pub fn new(key: Key) -> Self {
         Self {
             _marker: PhantomData,
-            key,
+            key: Arc::new(key),
         }
     }
 }
@@ -106,7 +109,7 @@ impl<C: Codec, H: Multihasher<Code>> Encoder for GenericStrobeCodec<C, H> {
         let data = C::encode(value).map_err(|e| Error::CodecError(Box::new(e)))?;
         let ct = crate::crypto::encrypt(&self.key, C::CODE, &data)
             .map_err(|e| Error::CodecError(Box::new(e)))?;
-        libipld::block::encode::<Raw, H, _>(&ct)
+        libipld::block::encode::<RawCodec, H, _>(&ct)
     }
 }
 
@@ -115,7 +118,7 @@ impl<C: Codec, H> Decoder for GenericStrobeCodec<C, H> {
     type Codec = C;
 
     fn decode<T: Decode<C>>(&self, cid: &Cid, data: &[u8]) -> Result<T> {
-        let ct = libipld::block::decode::<Raw, Box<[u8]>>(cid, data)?;
+        let ct = libipld::block::decode::<RawCodec, Box<[u8]>>(cid, data)?;
         let (codec, data) =
             crate::crypto::decrypt(&self.key, ct).map_err(|e| Error::CodecError(Box::new(e)))?;
         libipld::block::raw_decode::<C, T>(codec, &data)
@@ -125,7 +128,7 @@ impl<C: Codec, H> Decoder for GenericStrobeCodec<C, H> {
 #[cfg(feature = "crypto")]
 impl<C, H> IpldDecoder for GenericStrobeCodec<C, H> {
     fn decode_ipld(&self, cid: &Cid, data: &[u8]) -> Result<Ipld> {
-        let ct = libipld::block::decode::<Raw, Box<[u8]>>(cid, data)?;
+        let ct = libipld::block::decode::<RawCodec, Box<[u8]>>(cid, data)?;
         let (codec, data) =
             crate::crypto::decrypt(&self.key, ct).map_err(|e| Error::CodecError(Box::new(e)))?;
         libipld::block::raw_decode_ipld(codec, &data)

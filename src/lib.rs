@@ -18,11 +18,11 @@ pub use codec::*;
 pub use crypto::{Error, Key};
 pub use path::DagPath;
 
-use libipld::cbor::DagCbor;
+use libipld::cbor::DagCborCodec;
 use libipld::multihash::Blake2b256;
 
 /// Default codec.
-pub type Codec = GenericCodec<DagCbor, Blake2b256>;
+pub type Codec = GenericCodec<DagCborCodec, Blake2b256>;
 /// Default encrypted codec.
 #[cfg(feature = "crypto")]
-pub type StrobeCodec = GenericStrobeCodec<DagCbor, Blake2b256>;
+pub type StrobeCodec = GenericStrobeCodec<DagCborCodec, Blake2b256>;

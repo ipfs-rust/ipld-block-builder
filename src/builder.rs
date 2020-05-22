@@ -1,14 +1,11 @@
 use crate::batch::Batch;
-use crate::cache::Cache;
 use crate::codec::{Decoder, Encoder, Encrypted, IpldDecoder};
 use crate::path::DagPath;
-use libipld::block::Block;
 use libipld::cid::Cid;
 use libipld::codec::{Decode, Encode};
-use libipld::error::{Error, Result};
+use libipld::error::Result;
 use libipld::ipld::Ipld;
 use libipld::store::{AliasStore, MultiUserStore, ReadonlyStore, Store, Visibility};
-use std::ops::Deref;
 use std::path::Path;
 
 /// Generic block builder for creating blocks.
@@ -27,6 +24,21 @@ impl<S, C> BlockBuilder<S, C> {
             visibility: Visibility::Public,
         }
     }
+
+    /// Gets the visibility of the builder.
+    pub fn visibility(&self) -> Visibility {
+        self.visibility
+    }
+
+    /// Gets the store of the builder.
+    pub fn store(&self) -> &S {
+        &self.store
+    }
+
+    /// Gets the codec of the builder.
+    pub fn codec(&self) -> &C {
+        &self.codec
+    }
 }
 
 impl<S, C: Encrypted> BlockBuilder<S, C> {
@@ -40,24 +52,11 @@ impl<S, C: Encrypted> BlockBuilder<S, C> {
     }
 }
 
-impl<S, C> Deref for BlockBuilder<S, C> {
-    type Target = S;
-
-    fn deref(&self) -> &Self::Target {
-        &self.store
-    }
-}
-
 impl<S: ReadonlyStore, C: Decoder> BlockBuilder<S, C> {
     /// Returns the decoded block with cid.
     pub async fn get<D: Decode<C::Codec>>(&self, cid: &Cid) -> Result<D> {
         let data = self.store.get(cid).await?;
         self.codec.decode(cid, &data)
-    }
-
-    /// Creates a new typed cache.
-    pub fn create_cache<T: Clone + Decode<C::Codec>>(&self, size: usize) -> Cache<'_, S, C, T> {
-        Cache::new(&self.store, &self.codec, size)
     }
 }
 
@@ -83,10 +82,15 @@ impl<S: ReadonlyStore, C: IpldDecoder> BlockBuilder<S, C> {
     }
 }
 
-impl<S: Store, C: Encoder> BlockBuilder<S, C> {
+impl<S: Store, C: Encoder + Clone> BlockBuilder<S, C> {
     /// Creates a new batch.
-    pub fn create_batch<'a>(&'a self) -> Batch<C> {
-        Batch::new(&self.codec)
+    pub fn create_batch(&self) -> Batch<C> {
+        Batch::new(self.codec.clone())
+    }
+
+    /// Creates a new batch with capacity.
+    pub fn create_batch_with_capacity(&self, capacity: usize) -> Batch<C> {
+        Batch::with_capacity(self.codec.clone(), capacity)
     }
 
     /// Encodes and inserts a block into the store.
@@ -97,18 +101,8 @@ impl<S: Store, C: Encoder> BlockBuilder<S, C> {
     }
 
     /// Inserts a batch of blocks atomically pinning the last one.
-    pub async fn insert_batch<T>(&self, batch: Batch<'_, T>) -> Result<Cid> {
-        // TODO add insert batch to store trait
-        let mut last_cid = None;
-        for Block { cid, data } in batch.into_iter() {
-            self.store.insert(&cid, data, self.visibility).await?;
-            if let Some(cid) = last_cid.as_ref() {
-                self.unpin(cid).await?;
-            }
-            last_cid = Some(cid);
-        }
-        // TODO add EmptyBatch error
-        last_cid.ok_or(Error::BlockTooLarge(0))
+    pub async fn insert_batch<T>(&self, batch: Batch<T>) -> Result<Cid> {
+        Ok(self.store.insert_batch(batch.into_vec(), self.visibility).await?)
     }
 }
 
