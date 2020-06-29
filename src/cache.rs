@@ -10,6 +10,7 @@ use libipld::store::{ReadonlyStore, Store};
 use std::marker::PhantomData;
 
 /// Cache for ipld blocks.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cache<S, C, T> {
     builder: BlockBuilder<S, C>,
     cache: SizedCache<Cid, T>,
@@ -73,6 +74,7 @@ where
 }
 
 /// Typed batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CacheBatch<C, T> {
     _marker: PhantomData<T>,
     cache: Vec<(Cid, T)>,

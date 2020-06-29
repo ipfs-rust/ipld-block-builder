@@ -9,6 +9,7 @@ use libipld::store::{AliasStore, MultiUserStore, ReadonlyStore, Store, Visibilit
 use std::path::Path;
 
 /// Generic block builder for creating blocks.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BlockBuilder<S, C> {
     store: S,
     codec: C,

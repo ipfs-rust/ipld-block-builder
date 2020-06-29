@@ -5,6 +5,7 @@ use libipld::codec::Encode;
 use libipld::error::Result;
 
 /// Batch of blocks to insert atomically.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Batch<C> {
     codec: C,
     blocks: Vec<Block>,
