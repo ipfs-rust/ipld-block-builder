@@ -44,7 +44,7 @@ pub trait IpldDecoder {
 pub trait Encrypted {}
 
 /// Generic ipld codec.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct GenericCodec<C, H> {
     _marker: PhantomData<(C, H)>,
 }
