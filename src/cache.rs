@@ -49,7 +49,10 @@ where
             return Ok(value);
         }
         let value: T = self.builder.get(cid).await?;
-        self.cache.lock().await.cache_set(cid.clone(), value.clone());
+        self.cache
+            .lock()
+            .await
+            .cache_set(cid.clone(), value.clone());
         Ok(value)
     }
 }
@@ -168,7 +171,10 @@ macro_rules! derive_cache {
                 self.$field.create_batch()
             }
 
-            fn create_batch_with_capacity(&self, capacity: usize) -> $crate::CacheBatch<$codec, $type> {
+            fn create_batch_with_capacity(
+                &self,
+                capacity: usize,
+            ) -> $crate::CacheBatch<$codec, $type> {
                 self.$field.create_batch_with_capacity(capacity)
             }
 
@@ -187,5 +193,5 @@ macro_rules! derive_cache {
                 self.$field.unpin(cid).await
             }
         }
-    }
+    };
 }

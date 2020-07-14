@@ -12,7 +12,7 @@ mod path;
 
 pub use batch::Batch;
 pub use builder::BlockBuilder;
-pub use cache::{Cache, CacheBatch, ReadonlyCache, IpldCache};
+pub use cache::{Cache, CacheBatch, IpldCache, ReadonlyCache};
 pub use codec::*;
 #[cfg(feature = "crypto")]
 pub use crypto::{Error, Key};
