@@ -12,6 +12,7 @@ crypto = ["rand", "secrecy", "strobe-rs", "thiserror", "unsigned-varint", "zeroi
 
 [dependencies]
 async-std = "1.5.0"
+async-trait = "0.1.36"
 cached = "0.12.0"
 libipld = "0.3.0"
 rand = { version = "0.7.3", optional = true }

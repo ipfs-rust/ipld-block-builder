@@ -1,6 +1,8 @@
 use crate::batch::Batch;
 use crate::builder::BlockBuilder;
 use crate::codec::{Decoder, Encoder};
+use async_std::sync::Mutex;
+use async_trait::async_trait;
 use cached::stores::SizedCache;
 use cached::Cached;
 use libipld::cid::Cid;
@@ -10,64 +12,101 @@ use libipld::store::{ReadonlyStore, Store};
 use std::marker::PhantomData;
 
 /// Cache for ipld blocks.
-pub struct Cache<S, C, T> {
+pub struct IpldCache<S, C, T> {
     builder: BlockBuilder<S, C>,
-    cache: SizedCache<Cid, T>,
+    cache: Mutex<SizedCache<Cid, T>>,
 }
 
-impl<S: ReadonlyStore, C: Decoder, T: Clone + Decode<C::Codec>> Cache<S, C, T> {
+impl<S, C, T> IpldCache<S, C, T> {
     /// Creates a new cache of size `size`.
     pub fn new(store: S, codec: C, size: usize) -> Self {
         Self {
             builder: BlockBuilder::new(store, codec),
-            cache: SizedCache::with_size(size),
+            cache: Mutex::new(SizedCache::with_size(size)),
         }
     }
+}
 
+/// Readonly cache trait.
+#[async_trait]
+pub trait ReadonlyCache<C, T>
+where
+    C: Decoder + Clone + Send + Sync,
+    T: Decode<<C as Decoder>::Codec> + Clone + Send + Sync,
+{
     /// Returns a decoded block.
-    pub async fn get(&mut self, cid: &Cid) -> Result<T> {
-        if let Some(value) = self.cache.cache_get(cid).cloned() {
+    async fn get(&self, cid: &Cid) -> Result<T>;
+}
+
+#[async_trait]
+impl<S: ReadonlyStore + Send + Sync, C, T> ReadonlyCache<C, T> for IpldCache<S, C, T>
+where
+    C: Decoder + Clone + Send + Sync,
+    T: Decode<<C as Decoder>::Codec> + Clone + Send + Sync,
+{
+    async fn get(&self, cid: &Cid) -> Result<T> {
+        if let Some(value) = self.cache.lock().await.cache_get(cid).cloned() {
             return Ok(value);
         }
         let value: T = self.builder.get(cid).await?;
-        self.cache.cache_set(cid.clone(), value.clone());
+        self.cache.lock().await.cache_set(cid.clone(), value.clone());
         Ok(value)
     }
 }
 
-impl<S: Store, C, T> Cache<S, C, T>
+/// Cache trait.
+#[async_trait]
+pub trait Cache<C, T>: ReadonlyCache<C, T>
 where
-    C: Decoder + Encoder + Clone,
-    T: Clone + Decode<<C as Decoder>::Codec> + Encode<<C as Encoder>::Codec>,
+    C: Decoder + Encoder + Clone + Send + Sync,
+    T: Decode<<C as Decoder>::Codec> + Encode<<C as Encoder>::Codec> + Clone + Send + Sync,
 {
     /// Creates a typed batch.
-    pub fn create_batch(&self) -> CacheBatch<C, T> {
+    fn create_batch(&self) -> CacheBatch<C, T>;
+
+    /// Creates a typed batch.
+    fn create_batch_with_capacity(&self, capacity: usize) -> CacheBatch<C, T>;
+
+    /// Inserts a batch into the store.
+    async fn insert_batch(&self, batch: CacheBatch<C, T>) -> Result<Cid>;
+
+    /// Encodes and inserts a block.
+    async fn insert(&self, value: T) -> Result<Cid>;
+
+    /// Unpins a block.
+    async fn unpin(&self, cid: &Cid) -> Result<()>;
+}
+
+#[async_trait]
+impl<S: Store + Send + Sync, C, T> Cache<C, T> for IpldCache<S, C, T>
+where
+    C: Decoder + Encoder + Clone + Send + Sync,
+    T: Decode<<C as Decoder>::Codec> + Encode<<C as Encoder>::Codec> + Clone + Send + Sync,
+{
+    fn create_batch(&self) -> CacheBatch<C, T> {
         CacheBatch::new(self.builder.codec().clone())
     }
 
-    /// Creates a typed batch.
-    pub fn create_batch_with_capacity(&self, capacity: usize) -> CacheBatch<C, T> {
+    fn create_batch_with_capacity(&self, capacity: usize) -> CacheBatch<C, T> {
         CacheBatch::with_capacity(self.builder.codec().clone(), capacity)
     }
 
-    /// Inserts a batch into the store.
-    pub async fn insert_batch(&mut self, batch: CacheBatch<C, T>) -> Result<Cid> {
+    async fn insert_batch(&self, batch: CacheBatch<C, T>) -> Result<Cid> {
         let cid = self.builder.insert_batch(batch.batch).await?;
+        let mut cache = self.cache.lock().await;
         for (cid, value) in batch.cache {
-            self.cache.cache_set(cid, value);
+            cache.cache_set(cid, value);
         }
         Ok(cid)
     }
 
-    /// Encodes and inserts a block.
-    pub async fn insert(&mut self, value: T) -> Result<Cid> {
+    async fn insert(&self, value: T) -> Result<Cid> {
         let cid = self.builder.insert(&value).await?;
-        self.cache.cache_set(cid.clone(), value);
+        self.cache.lock().await.cache_set(cid.clone(), value);
         Ok(cid)
     }
 
-    /// Unpins a block.
-    pub async fn unpin(&mut self, cid: &Cid) -> Result<()> {
+    async fn unpin(&self, cid: &Cid) -> Result<()> {
         self.builder.unpin(cid).await
     }
 }
@@ -80,6 +119,7 @@ pub struct CacheBatch<C, T> {
 }
 
 impl<C: Encoder, T: Encode<C::Codec>> CacheBatch<C, T> {
+    /// Creates a new batch.
     pub fn new(codec: C) -> Self {
         Self {
             _marker: PhantomData,
@@ -88,6 +128,7 @@ impl<C: Encoder, T: Encode<C::Codec>> CacheBatch<C, T> {
         }
     }
 
+    /// Creates a new batch with capacity.
     pub fn with_capacity(codec: C, capacity: usize) -> Self {
         Self {
             _marker: PhantomData,
@@ -96,9 +137,55 @@ impl<C: Encoder, T: Encode<C::Codec>> CacheBatch<C, T> {
         }
     }
 
+    /// Inserts a value into the batch.
     pub fn insert(&mut self, value: T) -> Result<&Cid> {
         let cid = self.batch.insert(&value)?;
         self.cache.push((cid.clone(), value));
         Ok(cid)
+    }
+}
+
+/// Macro to derive cache trait for a struct.
+#[macro_export]
+macro_rules! derive_cache {
+    ($struct:tt, $field:ident, $codec:ty, $type:ty) => {
+        #[async_trait::async_trait]
+        impl<S> $crate::ReadonlyCache<$codec, $type> for $struct<S>
+        where
+            S: libipld::store::ReadonlyStore + Send + Sync,
+        {
+            async fn get(&self, cid: &libipld::cid::Cid) -> libipld::error::Result<$type> {
+                self.$field.get(cid).await
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl<S> $crate::Cache<$codec, $type> for $struct<S>
+        where
+            S: libipld::store::Store + Send + Sync,
+        {
+            fn create_batch(&self) -> $crate::CacheBatch<$codec, $type> {
+                self.$field.create_batch()
+            }
+
+            fn create_batch_with_capacity(&self, capacity: usize) -> $crate::CacheBatch<$codec, $type> {
+                self.$field.create_batch_with_capacity(capacity)
+            }
+
+            async fn insert_batch(
+                &self,
+                batch: $crate::CacheBatch<$codec, $type>,
+            ) -> libipld::error::Result<libipld::cid::Cid> {
+                self.$field.insert_batch(batch).await
+            }
+
+            async fn insert(&self, value: $type) -> libipld::error::Result<libipld::cid::Cid> {
+                self.$field.insert(value).await
+            }
+
+            async fn unpin(&self, cid: &libipld::cid::Cid) -> libipld::error::Result<()> {
+                self.$field.unpin(cid).await
+            }
+        }
     }
 }
