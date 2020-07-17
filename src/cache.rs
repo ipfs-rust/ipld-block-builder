@@ -76,6 +76,9 @@ where
     /// Encodes and inserts a block.
     async fn insert(&self, value: T) -> Result<Cid>;
 
+    /// Flushes all buffers.
+    async fn flush(&self) -> Result<()>;
+
     /// Unpins a block.
     async fn unpin(&self, cid: &Cid) -> Result<()>;
 }
@@ -107,6 +110,10 @@ where
         let cid = self.builder.insert(&value).await?;
         self.cache.lock().await.cache_set(cid.clone(), value);
         Ok(cid)
+    }
+
+    async fn flush(&self) -> Result<()> {
+        self.builder.flush().await
     }
 
     async fn unpin(&self, cid: &Cid) -> Result<()> {
@@ -187,6 +194,10 @@ macro_rules! derive_cache {
 
             async fn insert(&self, value: $type) -> libipld::error::Result<libipld::cid::Cid> {
                 self.$field.insert(value).await
+            }
+
+            async fn flush(&self) -> libipld::error::Result<()> {
+                self.$field.flush().await
             }
 
             async fn unpin(&self, cid: &libipld::cid::Cid) -> libipld::error::Result<()> {
