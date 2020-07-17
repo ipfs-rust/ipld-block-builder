@@ -195,3 +195,28 @@ macro_rules! derive_cache {
         }
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Codec;
+    use libipld::mem::MemStore;
+
+    struct OffchainClient<S> {
+        number: IpldCache<S, Codec, u32>,
+    }
+
+    derive_cache!(OffchainClient, number, Codec, u32);
+
+    #[async_std::test]
+    async fn test_cache() {
+        let store = MemStore::default();
+        let codec = Codec::new();
+        let client = OffchainClient {
+            number: IpldCache::new(store, codec, 1),
+        };
+        let cid = client.insert(42).await.unwrap();
+        let res = client.get(&cid).await.unwrap();
+        assert_eq!(res, 42);
+    }
+}
